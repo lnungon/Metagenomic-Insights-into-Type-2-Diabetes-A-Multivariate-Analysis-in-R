@@ -23,7 +23,7 @@ The following visualizations demonstrate the robust biological signal captured f
 This pipeline is built on the Bioconductor ecosystem for genomic data science and the primary frameworks used are: 
 * **Language:** R
 * **Bioinformatics:** Bioconductor:
-  * curatedMetagonicData, SummarizedEXperiment: for data acquisition and object manipulation
+  * curatedMetagonicData, SummarizedExperiment: for data acquisition and object manipulation
   * vegan: central study of ecological parameters like Shannon index
   * robusbase: for Mahalanabois distance calculation
   * FactoMineR, factoextra: calculations and visualizations of CA
