@@ -21,19 +21,18 @@ The control cohort and the patient cohort show slight differences in their ecolo
 
 The PCA score plot shows a clear overlap between the two populations. To select the principal components, we used the elbow method: 
 
-![Elbow method for Principal Components selection](plots/7 Elbow method for principal component selection-1.png)
+![Elbow method for Principal Components selection](plots/7_Elbow_method_principalcomponent_selection-1.png)
 
 > We continued the analysis with the first three components. 
 
 Since this is a microbiome study, we decided to apply an nMDS technique using Bray-Curtis distances. The reduction to a 2-dimensional scale shows a good profile. 
 
-![Shepard plot for two dimensions-condition](plots/14 Shepard diagram with 2 dimensions-1.png)
-
+![Shepard plot for two dimensions-condition](plots/14_Shepard_diagram_2d.png)
 > Shepard plot. The points form a well-defined line and upward curve, implying that the two-dimensional nMDS translates biological differences into visual distances.
 
 Finally, using correspondence analysis, we learned a bit more about the specific contribution of each bacterial species: 
 
-![Contribution plot showing the principal species responible for the control-patients biological differences in microbiome](plots/17 Contribution plot-1.png)
+![Contribution plot showing the principal species responible for the control-patients biological differences in microbiome](plots/17_Contribution_plot-1.png)
 
 > With a total inertia value of 0.0204, we see that there are differences between healthy controls and diabetic patients. The contribution plot shows that *group differences are driven primarily by bacteria from the phyla _Firmicutes_ and _Actinobacteria_**.
 
