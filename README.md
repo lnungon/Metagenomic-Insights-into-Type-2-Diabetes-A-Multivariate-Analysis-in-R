@@ -49,8 +49,8 @@ This pipeline is built on the Bioconductor ecosystem for genomic data science an
 Reproducibility Note: A comprehensive list of all loaded packages, versions, and the computational environment is provided in the Session Information section at the end of the final report.
 
 ## Repository Structure
-* This data comes from a published study: Qin J., *Nat.*, 2012. ** and complete data is available in GigaDB under accesion number [100036]([https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE161731](https://gigadb.org/dataset/100036))**.
-* [Subset of the data (.RData)] (QinJ_2012.RData): the subset of data from the total cohort of patients included in this study
+* This data comes from a published study: Qin J., *Nat.*, 2012. ** and complete data is available in GigaDB under accesion number [100036](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE161731](https://gigadb.org/dataset/100036))**.
+* [Subset of the data (.RData)](QinJ_2012.RData): the subset of data from the total cohort of patients included in this study
 * [Main Analysis Script (R)](Analysis_script.Rmd): Clean and commented code. 
 * [Full Research Report (HTML)](Full_Research_Report.html): Interactive report with all visualizations and statistical tables.
 * [Executive Summary (PDF)](executive_summary.pdf): High-level summary of findings for clinical stakeholders with minimal code requirements.
