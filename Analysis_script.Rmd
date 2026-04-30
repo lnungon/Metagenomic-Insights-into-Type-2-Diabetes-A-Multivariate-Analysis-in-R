@@ -1,0 +1,1021 @@
+---
+title: "Metagenomic Insights into Type 2 Diabetes A Multivariate Analysis in R"
+author: "Nunez Gonzalez, Laura"
+date: "2026-02-19"
+output:
+  word_document:
+    toc: true
+  pdf_document:
+    toc: true
+    extra_dependencies: ["caption"]
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+    self_contained: true
+header-includes:
+   - \captionsetup[figure]{font={small,it}, justification=centering}
+---
+
+<style>
+body {
+  text-align: justify;
+} 
+
+.hanging-indent {
+  padding-left: 2em;
+  text-indent: -2em;
+  margin-bottom: 1.5em; 
+}
+
+/* Fig cap in HTML */
+.caption {
+  font-size: 0.85em;
+  font-style: italic;
+  color: #444444;
+  text-align: center;
+  margin-top: 10px;
+}
+</style>
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE, 
+  message = FALSE, 
+  fig.align = "center"
+)
+
+#Libraries
+library(TreeSummarizedExperiment) #Bioconductor basic package for objects
+library(SummarizedExperiment) #Bioconductor basic package for objects
+library(curatedMetagenomicData) # Bioconductor for data acquisition (MGWAS)
+library(vegan) #for species richness and Shannon index calculation
+library(robustbase) #for Mahalanabois distance 
+library(knitr) #data visualization
+library(kableExtra) #Table visualization
+library(ggplot2) #Basic visualization tool
+library(FactoMineR) #for correspondence analysis calculations
+library(factoextra) #for correspondence analysis visualizations
+library(ggrepel) #Word modification inside graphs
+library(flextable) #Table configuration
+library(magrittr) #Table configuration
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.path = "plots/")
+```
+# 1. Introduction
+
+Type 2 diabetes (T2D) is a complex endocrine disorder in which the gut microbiota has emerged as a key biological factor. In fact, the composition of the microbiote influences metabolic functions such as glucose uptake and regulates pathophysiological pathways such as chronic inflammation. 
+
+The original paper for this study (Qin J, _Nature_, 2012) provided a significant new perspective by using a metagenomic genome-wide association study (MGWAS) approach. In addition to the computational load requirements, there is also a significant statistical challenge due to its multivariate nature. For example, we must address **sparsity**, as we will be working with a matrix containing a high frequency of missing values. 
+
+This project addresses these challenges by implementing basic and relevant multivariate techniques, such as principal component analysis (PCA), non-metric multidimensional scaling (nMDS), and correspondence analysis (CA). The ultimate goal is to **gain new insights into the “microbial fingerprint” of patients with T2D**.
+
+# 2. Objectives
+
+1. Examine **differences in bacterial species composition** between the groups, as well as various ecological parameters, such as the Shannon index.
+2. Analyze the total variance explained by bacteria using principal component analysis (PCA) and assess the **potential separation of the two populations**. 
+3. Calculate the distance using nMDS (Kruskal’s method with Bray-Curtis distances) to **identify biologically similar bacteria**.
+4. Analyze the **bacterial fingerprint of each group** using cluster analysis (CA). 
+
+# 3. Methodology
+
+The processed data from the study are obtained as relative abundances using the `curatedMetagenomicdata()` package in the Bioconductor environment (via RStudio). Using basic Bioconductor packages such as `summarizedExperiment`, we download the assays matrix and the metadata. From this matrix, we select a set of 30 control patients and 30 T2-D patients. 
+
+Bacteria are filtered by prevalence; only those microorganisms with more than 20% of their abundances >0 and with a mean abundance greater than (or equal to) the 50th percentile are considered. 
+
+For the outlier analysis, we focus on Euclidean and Mahalanobis distances, seeking the most extreme values. 
+
+Given the nature of relative abundances, the data are centered, scaled, and logarithmically transformed (by applying $log(x + 1e^-6)$) prior to analysis using PCA.
+
+# 4. Results
+
+## 4.1 Data acquisition
+
+We extract the data from the article using the `curatedMetagenomicData` function. Specifically, we are interested in the **summarizedExperiment** object, which contains the metadata (including patient information) and the assays matrix (containing all the quantifications). 
+
+```{r}
+#Data acquisition
+qin_data_list <- curatedMetagenomicData("2021-10-14.QinJ_2012.relative_abundance", dryrun = FALSE)
+
+# SummarizedExperiment extraction
+qin_tse <- qin_data_list[[1]]
+
+#Check 
+head(colData(qin_tse))
+```
+
+Now, we extract the matrix which contains quantitative information
+```{r}
+# Matrix extraction
+X0_ex0 <- as.matrix(assay(qin_tse))
+
+# Matrix transposition converts patients' information in rows
+X0_ex0 <- t(X0_ex0)
+
+dim(X0_ex0)
+```
+
+There is a total of 363 individuals with information for 651 bacterial species. 
+Since we want a subset consisting of 30 people from the control group and 30 patients, we extract the relevant information from the metadata.
+
+```{r}
+# Metadata definition
+metadata_full <- as.data.frame(colData(qin_tse))
+
+# Verify the column with condition disease
+head(metadata_full)
+```
+
+```{r}
+set.seed(4567)
+# Identify row indices for each group
+control_indices <- which(metadata_full$study_condition == "control")
+t2d_indices     <- which(metadata_full$study_condition == "T2D")
+
+# Randomly sample 30 indices from each group
+selected_control_indices <- sample(control_indices, 30)
+selected_t2d_indices     <- sample(t2d_indices, 30)
+
+# Combine selected indices
+final_selection_indices <- c(selected_control_indices, selected_t2d_indices)
+
+# Create the final  matrix (X1_ex0) 
+X1_ex0 <- X0_ex0[final_selection_indices, ]
+metadata_subset <- metadata_full[final_selection_indices, ]
+
+# Verification of the final subset
+cat("Dimensions of X1_ex0:", dim(X1_ex0), "\n")
+print(table(metadata_subset$study_condition))
+```
+
+In the following exercises we continue with the attached .RData (already included in the repository):  
+
+```{r load data}
+# Load data for exercise 1-7 
+load("QinJ_2012.Rdata")
+```
+
+## 4.2 Data preparation and ecological metrics
+
+As indicated we have data from "QinJ_2012.RData". In **X1 matrix** we have the following data: 30 control and 30 patients (T2M) with the bacterial identification and their relative abundance. 
+
+### 4.2.1 Data filtration
+
+Firstly, we preselect only those bacteria with a prevalence equal or superior to 20% and with a relative abundance in percentil 50.
+```{r}
+# Calculate the prevalence for each variable (column)
+# We calculate the proportion of samples where the bacteria count is >0
+prevalence <- colMeans(X1 > 0)
+
+# Calculate the mean abundance for each bacteria
+mean_abundance <- colMeans(X1)
+
+# 50th percentile of the mean abundances
+abundance_threshold <- quantile(mean_abundance, 0.50)
+
+keep_features <- (prevalence >= 0.20) & (mean_abundance >= abundance_threshold)
+
+# X1 after bacteria selection: 
+X1_filtered <- X1[, keep_features]
+
+# Check the results
+cat("Original number of features:", ncol(X1), "\n")
+cat("Features remaining after filtering:", ncol(X1_filtered), "\n")
+```
+From 651 original bacteria, there are only **unique 147 remaining microbes**. 
+
+### 4.2.2 Bacteria richness and Shannon index
+
+As we can see in the last example there is a total of 147 unique microorganisms. In order to investigate the Shannon index per group in our study, we need to classify the total cohort between control and patients. This information is available within metadata. 
+```{r}
+group <-meta$disease #We define each condition (healthy or T2D)
+
+pool_control <- colSums(X1[group == "healthy", ])
+pool_t2d     <- colSums(X1[group == "T2D", ])
+
+species_total_control <- sum(pool_control > 0)
+species_total_t2d     <- sum(pool_t2d > 0)
+
+cat("Species detected in control group:", species_total_control, "\n")
+cat("Species in T2D group:", species_total_t2d, "\n")
+
+```
+On the other hand, **Shannon index** (created in 1949) (1) is a widely used biomarker for biodiversity. It is defines as: 
+
+$H = - \sum p_i * ln (p_i)$
+
+being $H$ the Shannon index and $p_i$ the proportion of the entire community made up of species i. The higher the value of H, the higher the diversity of species in a particular community (2). 
+
+```{r}
+shannon_vec <- diversity(X1_filtered, index = "shannon") #Shannon index calculation
+shannon_per_group <- split(shannon_vec, group) #Shannon index per group (individual values, sorted by group)
+mean(shannon_per_group$healthy) 
+mean(shannon_per_group$T2D)
+```
+
+**Species richness and Shannon index show a similar value per group**, indicating a similar range of spaces in each individual. However, these parameters does not show information about the possible distinct nature of the microorganism in each group. 
+
+### 4.2.3 Histogram and Boxplot of Richness
+
+```{r 1 Histogram of Species Richness per group, fig.cap= "Histogram of Species Richness per group"}
+richness_individual <- specnumber(X1_filtered)
+
+richness_control <- richness_individual[group == "healthy"]
+richness_t2d <- richness_individual[group == "T2D"]
+
+#Histogram
+min_global <- min(richness_individual)
+max_global <- max(richness_individual)
+
+#We create a cutoff each 15 to ensure a equal number of bars per group
+cut <- seq(min_global, max_global, length.out = 15)
+
+h_control <- hist(richness_control, breaks = cut, plot = FALSE)
+h_t2d     <- hist(richness_t2d, breaks = cut, plot = FALSE)
+
+# Graphic 
+plot(h_control, col = rgb(0.2, 0.4, 0.6, 0.5), 
+     main = "Distribution of Species Richness",
+     xlab = "Number of species per individual",
+     ylab = "Number of individuals",
+     border = "white",
+     ylim = c(0, max(c(h_control$counts, h_t2d$counts)) + 1)) 
+#Overlapping of the second plot: T2D 
+plot(h_t2d, col = rgb(0.8, 0.3, 0.3, 0.5), 
+     add = TRUE, 
+     border = "white")
+
+legend("topleft", legend = c("Control", "T2D"), 
+       fill = c(rgb(0.2, 0.4, 0.6, 0.5), rgb(0.8, 0.3, 0.3, 0.5)),
+       bty = "n")
+```
+
+```{r 2 Boxplot of Species Richness per group, fig.cap="Boxplot of Species Richness per group"}
+#Boxplot 
+boxplot(richness_individual ~ group, 
+        main = "Species richness per group",
+        ylab = "Number of species",
+        xlab = "Condition",
+        col = c(rgb(0.2, 0.4, 0.6, 0.5),rgb(0.8, 0.3, 0.3, 0.5)), 
+        border = "#333333",            
+        notch = TRUE,                  # Median value
+        las = 1)                       
+
+# Number of individuals per group
+stripchart(richness_individual ~ group, 
+           vertical = TRUE, method = "jitter", 
+           add = TRUE, pch = 21, col = "black", bg = "white", cex = 0.8)
+```
+
+We can visualize a **slightly superior number of species in T2D group vs. healthy controls**. Indeed, there is a **greater number of individual with more species in T2D group**, as we can see in histogram plot. 
+
+### 4.2.4  Graph of average profiles (top 12 species by average abundance)
+
+In the total cohort: 
+```{r 3 Top 12 more abundant species, fig.cap="Top 12 more abundant species"}
+# 1. Mean of each species
+mean_species <- colMeans(X1_filtered)
+
+# 2. Top 12 species
+top12_names <- names(sort(mean_species, decreasing = TRUE)[1:12])
+X1_filtered_top12 <- X1_filtered[, top12_names]
+
+# 3. RENAMING FUNCTION 
+limpiar_nombre <- function(name) {
+  parts <- unlist(strsplit(name, "_"))
+  n <- length(parts)
+  if (n >= 2) {
+    # Usamos 'parts' (con 's') para que coincida con la definición de arriba
+    return(paste(parts[n-1], parts[n], sep = " ")) 
+  } else {
+    return(name) 
+  }
+}
+
+# 4. Apply function (Asegúrate de que el nombre coincide: 'limpiar_nombre')
+colnames(X1_filtered_top12) <- sapply(colnames(X1_filtered_top12), limpiar_nombre)
+
+# 5. Boxplot
+par(mar = c(5, 15, 4, 2)) # Aumentamos margen izquierdo para que quepan los nombres largos
+palette_12 <- c("#4D91A580", "#F28E2B80", "#76B7B280", "#E1575980", 
+                 "#59A14F80", "#EDC94880", "#B07AA180", "#FF9DA780", 
+                 "#9C755F80", "#BAB0AC80", "#4E79A780", "#F1CE6380")
+
+boxplot(X1_filtered_top12, 
+        horizontal = TRUE, 
+        las = 1, 
+        col = palette_12,
+        main = "Top 12 Species",
+        xlab = "Relative abundance",
+        outline = FALSE,
+        cex.axis = 0.8) 
+```
+
+Now, we additionally study the most abundant species per group: 
+
+```{r 4 Top 10 more abundat species in each group, fig.cap="Top 10 more abundat species in each group"}
+X1_control <- X1_filtered[group == "healthy", ]
+X1_t2d     <- X1_filtered[group == "T2D", ]
+
+# Top 10 species in each group
+top_names_ctrl <- names(sort(colMeans(X1_control), decreasing = TRUE)[1:10])
+top_names_t2d  <- names(sort(colMeans(X1_t2d), decreasing = TRUE)[1:10])
+
+# 3. Extraer abundancias y limpiar nombres
+X1_ctrl_plot <- X1_control[, top_names_ctrl]
+X1_t2d_plot  <- X1_t2d[, top_names_t2d]
+
+colnames(X1_ctrl_plot) <- sapply(colnames(X1_ctrl_plot), limpiar_nombre)
+colnames(X1_t2d_plot)  <- sapply(colnames(X1_t2d_plot), limpiar_nombre)
+
+par(mar = c(5, 20, 4, 2))
+
+# Control Healthy group
+boxplot_control <- boxplot(X1_ctrl_plot, 
+        horizontal = TRUE, las = 1, 
+        col = rgb(0.2, 0.4, 0.6, 0.5), 
+        main = "Top 12 most abundant species in Healthy (Control) group",
+        xlab = "Relative Abundance",
+        outline = FALSE, cex.axis = 0.8, cex.main= 0.8)
+
+# T2D boxplot 
+boxplot_t2d <- boxplot(X1_t2d_plot, 
+        horizontal = TRUE, las = 1, 
+        col = rgb(0.8, 0.3, 0.3, 0.5), 
+        main = "Top 12 most abundant species in T2D Patients",
+        xlab = "Relative Abundance",
+        outline = FALSE, cex.axis = 0.8, cex.main =0.9)
+```
+
+### 4.2.5 Euclidean distance and Mahalanobis distances
+
+From current raw data we need to apply these transformations: **Log-transformation $\rightarrow$ Centering $\rightarrow$ Scaling**.
+This is crucial in microbiome analysis to ensure that highly abundant species don't drown out the signal of the others.
+
+The Euclidean distance in metabolomics is a classic, simplified measure used to assess how similar two variables are (bacteria, in this case). However, various forms of normalization have emerged. Among these, the Bray-Curtis distance is a widely used method in quantitative analyses such as the one studied here. Some of its main advantages are (4): 
+
+1. _Zero-problem_. Bacteria with a relative abundance of 0 (the bacteria have not been detected) would be considered similar under Euclidean distance, whereas Bray-Curtis ignores these bacteria and works only with the detected bacteria. 
+
+2. _Relative vs. absolute abundance_. In Euclidean distance, we assume that the variables are independent of one another, but in this study we work with relative abundance (which breaks this assumption). Bray-Curtis does not use this assumption. 
+
+3. _Differences in magnitude_. In the Euclidean distance method, the most abundant bacteria outweigh the rest, whereas Bray-Curtis uses normalizers for the quantity, thereby reducing this problem. 
+
+```{r}
+#log transformation based on (log(x + 1e-6))
+# This handles zeros and reduces the skewness of the data
+X_log <- log(X1_filtered + 1e-06)
+
+# Center and Scaling
+# 'center = TRUE' 
+# 'scale = TRUE' 
+X_scaled <- scale(X_log, center = TRUE, scale = TRUE)
+```
+
+Now, we calculate both Euclidean and Mahalanabois distances in the top 12 species. **As we want to use the robust covariance matrix we will need a similar number of species and individuals (4) . We only have 60 individual so we can reduce the number of species and use only top 12 most representative bacteria**. In contrast to Euclidean distance, Mahalanabois distante accounts for correlation and scale. It tells you how many "standard deviations" a point is away from the mean. It takes into account correlation patterns inside the data. 
+
+```{r}
+# Identification of  the Top 12 species based on their mean abundance
+mean_abundance <- colMeans(X1_filtered)
+top12_species <- names(sort(mean_abundance, decreasing = TRUE)[1:12])
+
+# subset for distance calculation
+X_top12 <- X_scaled[, top12_species]
+
+X_top12[is.na(X_top12)] <- 0
+X_top12[!is.finite(X_top12)] <- 0
+
+### EUCLIDEAN DISTANCE
+euclidean_dist <- sqrt(rowSums(X_top12^2))
+names(euclidean_dist) <- rownames(X_top12)
+
+### MAHALANOBIS DISTANCE
+robust_fit <- try(covMcd(X_top12), silent = TRUE)
+
+if (inherits(robust_fit, "try-error") || is.null(robust_fit$mah)) {
+    message("MCD failed. Calculating Classical Mahalanobis...")
+    S <- cov(X_top12)
+    diag(S) <- diag(S) + 0.01  # Add a tiny 'jitter' to prevent singularity
+    
+    m_values <- mahalanobis(X_top12, center = colMeans(X_top12), cov = S)
+} else {
+    m_values <- robust_fit$mah
+}
+
+mahalanobis_dist <- sqrt(as.numeric(m_values))
+names(mahalanobis_dist) <- rownames(X_top12)
+```
+
+Although the original idea was the use of **MCD (Minimum Covariance Determinant)** method. However, because of the high zero-count frequency of the microbiome  profiles, the Robust MCD estimator encountered singularity issues. To confront this issue we opted for a classical method calculation in Mahalanabois distance. 
+
+```{r}
+#Comparison of the most extreme value
+# Verify results
+max_eucl <- names(euclidean_dist)[which.max(euclidean_dist)]
+max_maha <- names(mahalanobis_dist)[which.max(mahalanobis_dist)]
+
+cat("Success!\n")
+cat("Euclidean distance: the most extreme value is:", max_eucl, "\n")
+cat("Mahalanobis distance: the most extreme value is:", max_maha, "\n")
+```
+```{r 5 The most extreme value based on Eclidean and Mahalanabois distances, fig.cap= "The most extreme value based on Eclidean and Mahalanabois distances"}
+val_t2d100 <- richness_individual["T2D-100"]
+
+boxplot(richness_individual ~ group, 
+        main = "Species richness per group",
+        ylab = "Number of species",
+        xlab = "Condition",
+        col = c(rgb(0.2, 0.4, 0.6, 0.5), rgb(0.8, 0.3, 0.3, 0.5)), 
+        border = "#333333",            
+        notch = TRUE, 
+        las = 1) 
+
+# Highlight this specific point
+stripchart(richness_individual ~ group, 
+           vertical = TRUE, method = "jitter", 
+           add = TRUE, pch = 21, col = "black", bg = "white", cex = 0.8)
+if ("T2D-100" %in% names(richness_individual)) {
+    val_t2d100 <- richness_individual["T2D-100"]
+    points(x = 2, y = val_t2d100, col = "red3", pch = 19, cex = 1.5)
+    
+    # Label
+    text(x = 2, y = val_t2d100, labels = "T2D-100", 
+         pos = 4, col = "red3", font = 2, cex = 0.9)
+}
+```
+
+Herein we have obtained the same individual as the most extreme value for both distances: T2D-100. However, this patient does not look as an extreme outlier graphically. Maybe, this individual has a different microbiome composition.
+
+## 4.3 Principal Component Analysis (PCA) 
+
+### 4.3.1 PCA results
+
+We perform a PCA analysis taking our transformed and scaled data. Since we are working with relative abundances, the total of the data always adds up to 100%, and **if we want to remove a specific data point, this will affect all the remaining ones**. Since PCA is based directly on Euclidean distance, we see that the assumption of independence among the variables is violated. 
+
+However, since we have transformed the values by **applying a logarithm, we reverse this relationship**. Hence the importance of performing this operation prior to the principal component analysis. 
+
+```{r}
+pca_results <- prcomp(X_scaled, center = TRUE, scale. = TRUE)
+summary_pca <- summary(pca_results)
+print(summary_pca$importance[, 1:5])
+```
+
+With the five first component we explain a total of 38.75% of total variance. 
+
+```{r 6 Scree plot, fig.cap=" Scree plot"}
+plot(pca_results, type = "l", main = "Scree Plot: Variance in each component")
+```
+
+### 4.3.2 Principal Components (PCs) selection
+
+If we want to perform a selection of component we can employ two different criteria (6): 
+1. *Elbow method**: One possible method is based on the retention of all the components in the steep part of the curve (scree plot). Application: 
+```{r 7 Elbow method for principal component selection, fig.cap= "Elbow method for principal component selection"}
+
+explained_var <- pca_results$sdev^2 / sum(pca_results$sdev^2)
+
+barplot(explained_var, 
+        names.arg = paste0("PC", 1:length(explained_var)),
+        main = "Scree Plot: Component selection",
+        ylab = "Proportion of explained variance",
+        xlab = "Principal Components",
+        col = "steelblue", 
+        border = "white",
+        ylim = c(0, max(explained_var) + 0.05))
+
+# Elbow visualization
+lines(x = seq(0.7, length(explained_var)*1.2, length.out = length(explained_var)), 
+      y = explained_var, 
+      type = "b", pch = 19, col = "red3", lwd = 2)
+
+abline(v = 3.5, col = "darkgreen", lty = 2, lwd = 2) 
+text(x = 4.5, y = 0.15, "Elbow", col = "darkgreen", font = 2)
+```
+
+Based on this method we have chosen the three first components to continue with posterior analysis. 
+
+2. **Method based on the achievement of a predetermined value** for the cumulative proportion. One classical example is how many components we need to capture the 90% of the total explained variance. Application: 
+```{r 8 Cumulative proportion explained in each component, fig.cap= "Cumulative proportion explained in each component"}
+#Proportion of explained variance
+pca_prop_var<- explained_var/ sum(explained_var)
+#Cumulative proportion plot
+plot(cumsum(pca_prop_var), type = 'b')
+```
+
+In the case we have selected a prefixed cumulative variance of 90%, we will have to use more than thirty components. In consequence, there is a complex biological environment. there is no predominant bacteria in all the individuals explaining the total variance. 
+
+Consequently, **a more pragmatic approach was adopted, focusing on the first 3 components. Although these represent a lower percentage of the total variance, they capture the primary biological gradients and provide a interpretable low-dimensional space for identifying sample clusters and group separations**.
+
+### 4.3.3 The most influent variables
+
+Now we want to define the variables that contribute more to the first two principal components. 
+```{r 9 Top 10 most influent variables in PC1 and PC2, fig.cap= "Top 10 most influent variables in PC1 and PC2"}
+# Loading extraction
+loadings <- pca_results$rotation
+
+# top10 species in PC1
+top_pc1 <- sort(abs(loadings[,1]), decreasing = TRUE)[1:10]
+species_pc1 <- names(top_pc1)
+
+# top10 species in PC2
+top_pc2 <- sort(abs(loadings[,2]), decreasing = TRUE)[1:10]
+species_pc2 <- names(top_pc2)
+
+# Dataframe
+df_pc1 <- data.frame(
+  Species = c("Butyricimonas virosa", "Firmicutes bacterium CAG 83", "Alistipes shahii", 
+              "Dorea formicigenerans", "Alistipes indistinctus", "Intestinimonas butyriciproducens",
+              "Eubacterium hallii", "Collinsella aerofaciens", "Blautia obeum", "Alistipes putredinis"),
+  Gender = c("Butyricimonas", "Unclassified", "Alistipes", "Dorea", "Alistipes", 
+             "Intestinimonas", "Eubacterium", "Collinsella", "Blautia", "Alistipes"),
+  Loading = c(0.1672, 0.1616, 0.1608, 0.1531, 0.1516, 0.1499, 0.1482, 0.1481, 0.1435, 0.1397)
+)
+
+# Table
+table_pc1 <- flextable(df_pc1) %>%
+  set_header_labels(Species = "Species", Gender = "Gender", Loading = "Loading") %>%
+  set_caption("Top 10 most influent variables in PC1") %>%
+  italic(j = 1, part = "body") %>%     
+  bold(j = 1, part = "body") %>%       
+  bold(part = "header") %>%            
+  color(part = "header", color = "white") %>%
+  bg(part = "header", bg = "#333333") %>%
+  bg(j = 3, bg = "#56B4E9", part = "body") %>% 
+  color(j = 3, color = "black", part = "body") %>% 
+  align(align = "center", part = "all") %>%
+  autofit()
+
+df_pc2 <- data.frame(
+  Species = c("Bacteroides finegoldii", "Bacteroides intestinalis", "Bacteroides thetaiotaomicron", 
+              "Bacteroides uniformis", "Barnesiella intestinihominis", "Parabacteroides distasonis",
+              "Ruminococcus torques", "Alistipes finegoldii", "Faecalibacterium prausnitzii", "Bacteroides caccae"),
+  Gender = c("Bacteroides", "Bacteroides", "Bacteroides", "Bacteroides", "Barnesiella", 
+             "Parabacteroides", "Ruminococcus", "Alistipes", "Faecalibacterium", "Bacteroides"),
+  Loading = c(0.2814, 0.2452, 0.2103, 0.1988, -0.1874, -0.1765, 0.1741, -0.1698, 0.1552, 0.1429)
+)
+
+#Table 
+table_pc2 <- flextable(df_pc2) %>%
+  set_caption("Top 10 most influent variables in PC2") %>%
+  italic(j = 1, part = "body") %>%
+  bold(j = 1, part = "body") %>%
+  bg(j = 3, bg = scales::col_numeric(palette = "Blues", domain = range(df_pc2$Loading))(df_pc2$Loading)) %>%
+  color(j = 3, color = "black", part = "body") %>%
+  autofit()
+
+table_pc1 
+table_pc2
+```
+
+**Score plot** shows the behaviour between healthy controls an patients 
+```{r 10 Score plot from PCA analysis, fig.cap="Score plot from PCA"}
+
+pca_scores <- as.data.frame(pca_results$x)
+pca_scores$Condition <- factor(group) 
+
+palette_pca <- c(rgb(0.2, 0.4, 0.6, 0.5), rgb(0.8, 0.3, 0.3, 0.5)) 
+names_condition <- levels(pca_scores$Condition)
+
+# Graph
+plot(pca_scores$PC1, pca_scores$PC2, 
+     pch = 21, 
+     bg = palette_pca[pca_scores$Condition], 
+     col = "white", 
+     cex = 1.5,
+     lwd = 0.5,
+     main = "Principal Component Analysis",
+     xlab = paste0("PC1 (", round(summary_pca$importance[2,1]*100, 1), "%)"),
+     ylab = paste0("PC2 (", round(summary_pca$importance[2,2]*100, 1), "%)"),
+     las = 1,
+     bty = "l")
+abline(h = 0, v = 0, lty = 2, col = "gray80")
+
+# Legend
+legend("topright", 
+       legend = names_condition, 
+       pt.bg = palette_pca, 
+       pch = 21, 
+       col = "white", 
+       bty = "n", 
+       cex = 0.9,
+       title = "Group")
+```
+
+In the score plot we can visualize a extreme overlapping among control and patients. There is no clear distinction between the two populations. Additionally, tehre is no one outstanding outlier point. 
+
+In the case we want to visualize the most extreme value (T2-100) detected previously: 
+```{r 11 Score plot highlighting the extreme value , fig.cap="Score plot from PCA"}
+
+target_id <- "T2D-100"
+
+# Coordinate extraction
+if (target_id %in% rownames(pca_scores)) {
+  target_x <- pca_scores[target_id, "PC1"]
+  target_y <- pca_scores[target_id, "PC2"]
+
+# Score plot
+plot(pca_scores$PC1, pca_scores$PC2, 
+     pch = 21, 
+     bg = palette_pca[pca_scores$Condition], 
+     col = "white", 
+     cex = 1.5,
+     lwd = 0.5,
+     main = "Principal Component Analysis",
+     xlab = paste0("PC1 (", round(summary_pca$importance[2,1]*100, 1), "%)"),
+     ylab = paste0("PC2 (", round(summary_pca$importance[2,2]*100, 1), "%)"),
+     las = 1,
+     bty = "l")
+abline(h = 0, v = 0, lty = 2, col = "gray80")
+
+# Legend
+legend("topright", 
+       legend = names_condition, 
+       pt.bg = palette_pca, 
+       pch = 21, 
+       col = "white", 
+       bty = "n", 
+       cex = 0.9,
+       title = "Group")
+
+# Mahalanabois extreme value
+  points(target_x, target_y, 
+         col = "red3", 
+         pch = 1,      
+         cex = 2.5,    
+         lwd = 2)      
+  text(target_x, target_y, 
+       labels = target_id, 
+       pos = 4,        
+       col = "red3", 
+       font = 2,       
+       cex = 0.8)      
+}
+```
+
+Now we can check the possible consequences in the removal of this conflictive point: 
+```{r 12 Score plot after outlier removal, fig.cap= "Score plot after outlier removal"}
+#Outlier removal: 
+outlier_id <- "T2D-100"
+X_filtered_outlier <- X_scaled[rownames(X_scaled) != outlier_id, ]
+group_filtered_outlier <- group[rownames(X_scaled) != outlier_id]
+
+# New PCA without T2D-100:
+pca_filtered_outlier <- prcomp(X_filtered_outlier, center = TRUE, scale. = TRUE)
+summary_filtered_outlier <- summary(pca_filtered_outlier)
+
+# New scores without T2D-100:
+pca_scores_f_outlier <- as.data.frame(pca_filtered_outlier$x)
+pca_scores_f_outlier$Condition <- factor(group_filtered_outlier)
+palette_pca <- c(rgb(0.2, 0.4, 0.6, 0.5), rgb(0.8, 0.3, 0.3, 0.5))
+names_condition <- levels(pca_scores_f_outlier$Condition)
+
+# New score plot withouth T2D-100:
+plot(pca_scores_f_outlier$PC1, pca_scores_f_outlier$PC2, 
+     pch = 21, 
+     bg = palette_pca[pca_scores_f_outlier$Condition], 
+     col = "white", 
+     cex = 1.5,
+     lwd = 0.5,
+     main = "PCA (withouth T2D-100)",
+     xlab = paste0("PC1 (", round(summary_filtered_outlier$importance[2,1]*100, 1), "%)"),
+     ylab = paste0("PC2 (", round(summary_filtered_outlier$importance[2,2]*100, 1), "%)"),
+     las = 1,
+     bty = "l")
+
+abline(h = 0, v = 0, lty = 2, col = "gray80")
+
+legend("topright", 
+       legend = names_condition, 
+       pt.bg = palette_pca, 
+       pch = 21, 
+       col = "white", 
+       bty = "n", 
+       cex = 0.9,
+       title = "Group")
+```
+
+There is no overall impact with the elimination of this single value. In fact, PC1 and PC2 has a similar values of total explained variance afther the outlier elimination (14% and 13.9% in PC1 and 9.6% and 10% in PC2).  
+
+## 4.4 Multidimensional Scaling (MDS)
+
+### 4.4.1 Perform a non-metric Kruskal MDS using the Bray-Curtis distance
+
+Non-metric multidimensional scaling, or nMDS, is one multivariate technique that allows us to visualize complex relationships (multivariate data) in less dimensions.AS we have relative quantities, Bray Curtis method is ideal for this dataset (5). 
+
+```{r}
+# nMDS with 2 dimensions (k = 2)
+set.seed(123) # For reproducibility issues
+nmds_2d <- metaMDS(X1_filtered, distance = "bray", k = 2, 
+                   autotransform = FALSE, trace = 0)
+
+# nMDS with 3 dimensions (k = 3)
+set.seed(123)
+nmds_3d <- metaMDS(X1_filtered, distance = "bray", k = 3, 
+                   autotransform = FALSE, trace = 0)
+
+# Stess parameter in both models
+stress_2d <- nmds_2d$stress
+stress_3d <- nmds_3d$stress
+
+cat("Stress para 2D:", stress_2d, "\n")
+cat("Stress para 3D:", stress_3d, "\n")
+```
+
+The **Stress value is the primary metric for evaluating the goodness-of-fit in an nMDS ordination**. In community ecology, it is widely accepted that a stress value exceeding 0.20 indicates an unreliable representation, where the low-dimensional mapping fails to capture the multidimensional relationships of the dataset.
+
+In our analysis, the 2D model exceeded this threshold, suggesting that two axes are insufficient to resolve the microbial community structure. Conversely, increasing the ordination to three dimensions (k = 3) reduced the stress to 0.171. While this value falls within the 'usable' range (0.10 < Stress < 0.20), it still indicates a relatively high degree of distortion (6). 
+
+```{r 13 nMDS Scree Plot (Stress vs Dimensions), fig.cap="nMDS Scree Plot (Stress vs Dimensions)"}
+
+k_values <- 2:6
+stress_values <- numeric(length(k_values))
+
+# nMDS in each dimension
+for (i in seq_along(k_values)) {
+  set.seed(123)
+  nmds_temp <- metaMDS(X1_filtered, distance = "bray", 
+                       k = k_values[i], 
+                       autotransform = FALSE, 
+                       trace = 0, 
+                       trymax = 50)
+  stress_values[i] <- nmds_temp$stress
+}
+
+# Scree Plot
+plot(k_values, stress_values, 
+     type = "b",              
+     pch = 19, 
+     col = "#2C3E50", 
+     lwd = 2,
+     main = "nMDS Scree Plot (Stress vs Dimensions)",
+     xlab = "Number of Dimensions (k)",
+     ylab = "Stress",
+     ylim = c(0, max(stress_values) + 0.05),
+     las = 1, 
+     bty = "l")
+
+# Reference lines
+abline(h = 0.2, col = "red3", lty = 2) 
+abline(h = 0.1, col = "blue4", lty = 2) 
+text(5.5, 0.21, "Poor fit threshold", col = "red3", cex = 0.8)
+```
+
+We have a graphic representation on how adding more dimensions diminishes the stress value. 
+
+### 4.4.2 Shepard for 2 dimensions condition
+
+```{r 14 Shepard diagram with 2 dimensions, fig.cap= "Shepard diagram with 2 dimensions"}
+stressplot(nmds_2d)
+```
+
+In this Shepard plot, the **X-axis shows the actual distances between each pair of bacteria (calculated using the Bray-Curtis index)**, while the **Y-axis shows the distances in a two-dimensional reduced model**. The red line represents the monotonic regression line (7), the mathematical ideal on which the points would lie if the nMDS were appropriate. We can see that **these points lie quite precisely on the line, which establishes the nMDS model with k=2 as a valid approximation** for this study. This idea is corroborated by non-metric fit ($R^2 = 0.94$). 
+
+```{r 15 nMDS 2D Ordination (Bray-Curtis dissimilarity), fig.cap="nMDS 2D Ordination (Bray-Curtis dissimilarity)"}
+group <- as.factor(group)
+
+nmds_scores <- as.data.frame(scores(nmds_2d, display = "sites"))
+
+palette_nmds <- c(rgb(0.2, 0.4, 0.6, 0.5), rgb(0.8, 0.3, 0.3, 0.5)) 
+colores_puntos <- palette_nmds[group]
+
+par(mar = c(5, 4, 8, 2))
+plot(nmds_scores$NMDS1, nmds_scores$NMDS2, 
+     pch = 21,               
+     bg = colores_puntos,    
+     col = "white",          
+     cex = 1.8,              
+     lwd = 0.8,
+     main = paste0("nMDS 2D Ordination (Bray-Curtis dissimilarity)\nStress: ", 
+                   round(nmds_2d$stress, 3)),
+     xlab = "NMDS Dimension 1", 
+     ylab = "NMDS Dimension 2",
+     las = 1,                
+     bty = "l")              
+
+# 3. Añadir leyenda
+legend("topleft", 
+       legend = levels(group), 
+       pt.bg = palette_nmds[1:length(levels(group))], 
+       pch = 21, 
+       col = "white", 
+       bty = "n", 
+       cex = 0.9,
+       title = "Group", 
+       inset= c(0, -0.045))
+
+```
+
+The nMDS ordination reveals a **significant overlap between the microbial profiles of the control and patient groups**. **Consistent with the previous PCA results, there is no clear differential composition or distinct clustering** based on the experimental condition. This suggests that the Bray-Curtis dissimilarity index does not capture a strong separation between the two cohorts.
+
+We repeat the last process eliminating the patient T2D-100.
+```{r 16 nMDS 2D Ordination withouth T2D-100, fig.cap="nMDS 2D Ordination (Bray-Curtis dissimilarity) withouth T2D-100"}
+
+# Removal specific outlier
+outlier_id <- "T2D-100"
+outlier_pos <- which(rownames(X1_filtered) == outlier_id)
+
+# Create clean datasets (excluding the outlier)
+X1_clean <- X1_filtered[-outlier_pos, ]
+group_clean <- group[-outlier_pos]
+group_clean <- as.factor(group_clean)
+
+# nMDS CALCULATION 
+dist_matrix <- vegdist(X1_clean, method = "bray")
+nmds_results <- metaMDS(dist_matrix, k = 2, trymax = 100, trace = 0)
+
+# Visualization in 2d mapping
+par(mar = c(5, 5, 6, 2)) 
+
+plot(nmds_results, display = "sites", type = "n", 
+     main = "nMDS Ordination of Gut Microbiota",
+     xlab = "NMDS Axis 1", 
+     ylab = "NMDS Axis 2",
+     cex.main = 0.9) 
+
+# Add the samples as points
+points(nmds_results, display = "sites", 
+       col = "white", 
+       bg = palette_nmds[group_clean], 
+       pch = 21, 
+       cex = 1.3)
+
+# Legend
+legend("topright", 
+       legend = levels(group_clean), 
+       pt.bg = palette_nmds[1:length(levels(group_clean))], 
+       pch = 21, 
+       col = "white", 
+       bty = "n", 
+       cex = 0.8,
+       title = "Group",
+       xpd = TRUE,      # Allows drawing outside the plot area
+       inset = c(0, 0)) # Moves the legend up into the margin
+
+mtext(paste("Stress:", round(nmds_results$stress, 3)), side = 3, adj = 0, line = 0.5, cex = 0.7)
+```
+
+Stress value has been diminished in a low magnitude. Additionally, there is no relevant change in qualitative mapping (2d) with or withouth the outlier value. 
+
+## 4.5 Correspondence analysis (CA)
+
+**Correspondence Analysis (CA) allows us to study the association between qualitative variables (in this case, health status and taxonomy)**. By decomposing the total inertia, we identify which bacterial phyla deviate from the average profile, enabling us to visualize which taxa actually define the microbial signature of Type 2 diabetes compared to a healthy state.
+
+```{r}
+# CA definition
+res.ca <- CA(Tg, graph = FALSE)
+
+#Inertia
+eig <- get_eigenvalue(res.ca)
+inertia_total <- eig[1, 1] 
+print(paste("Total inertia:", round(inertia_total, 4)))
+
+# Chi-cuadrado statistisc from inertia value
+N <- sum(Tg)
+inercia <- 0.0204
+chi_cuadrado <- inertia_total * N
+
+# Degrees of freedom: (row - 1) * (col - 1)
+df <- (nrow(Tg) - 1) * (ncol(Tg) - 1)
+
+#p value
+p_value_chi <- pchisq(chi_cuadrado, df = df, lower.tail = FALSE)
+
+cat("Chi-square statistics:", round(chi_cuadrado, 4), "\n")
+cat("Degrees of freedom:", df, "\n")
+cat("p-value:", format.pval(p_value_chi, eps = 0.001))
+```
+
+**Inertia is a measure of variance or dispersion** of the individual profiles around the average profile and represents a measure of deviation from independence. The larger the differences are, the larger the inertia will be (9). In this study we he obtained a **low value for inertia (0.0204)**. However, this value is sufficient to achieve a statistical significance (with p value less than 0.001). In consequence, although no huge difference in quantity and nature of the bacteria, there is still relevant and biological discrepancies between the microbiote of control and patients. 
+
+```{r}
+#Eigenvalues
+print(eig)
+```
+
+The **Eigenvalue represents the amount of total inertia accounted for by a specific principal axis**. In this analysis, the first dimension yielded an eigenvalue of 0.0204, which represents 100% of the total inertia. This indicates that the single axis perfectly captures the entire variance between the Healthy and T2D cohorts(8). 
+
+```{r 17 COntribution plot, fig.cap="Contribution plot"}
+#Contribution
+fviz_contrib(res.ca, 
+             choice = "col", 
+             axes = 1, 
+             fill = "steelblue", 
+             color = "white") + 
+  labs(title = "Phyla Contribution to Dimension 1 (Healthy vs T2D)") +
+  theme_minimal()
+
+```
+
+With a total inertia value of 0.0204, we see that there are differences between healthy controls and diabetic patients. The contribution plot for dimension 1 shows that *these differences are primarily driven by bacteria from the phyla _Firmicutes_ and _Actinobacteria_**. 
+
+```{r 18 Profile plot, fig.cap= "Profile plot"}
+#Profiles
+col_coords <- as.data.frame(res.ca$col$coord[, 1, drop = FALSE])
+colnames(col_coords) <- "Dim1"
+col_coords$Phylum <- rownames(col_coords)
+
+#Plot
+ggplot(col_coords, aes(x = Dim1, y = 0)) +
+  geom_hline(yintercept = 0, color = "gray70") +
+  geom_point(color = "red3", size = 4) +
+  geom_text_repel(aes(label = Phylum), 
+                  direction = "y",        
+                  nudge_y = 0.03,         
+                  segment.color = "grey50", 
+                  size = 3.5) +
+  labs(title = "Column Profiles: Phyla positions along Dimension 1",
+       subtitle = "Healthy (Left) vs T2D (Right) Gradient",
+       x = "Coordination on Dim 1 (100% Inertia)",
+       y = "") +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(), 
+        panel.grid = element_blank(),
+        axis.line.x = element_line(color = "black"))
+```
+
+The profile graph shows that bacteria from the phyla _Synergistetes_, _Actinobacteria_, and _Fusobacteria_ contribute positively to a T2D profile (right side of the graph), while the presence of _Proteobacteria_ is typical of a healthy microbiota profile. We can also see that _Bacteriodetes_ levels remain practically unchanged in healthy individuals compared to patients. 
+
+# 5. Discussion 
+
+First, it should be noted that we are using a **subset of individuals** (30 healthy subjects and 30 patients) from the original cohort (which comprises a total of 345 individuals). Therefore, any conclusions from this study that differ from those in the article should be interpreted with caution. 
+
+**Qin J’s study (10) reports moderate dysbiosis** in patients compared to healthy individuals, characterized by a non-significant difference in bacterial diversity between controls and patients. **This correlates perfectly with our results**, where there is a similar Shannon index between both groups. 
+
+Regarding the nature of the predominant species by group, our study agrees on a greater presence of **opportunistic microorganisms in the T2D group** (such as _Clostridium bolteae_) and a **lower number of butyrate-producing species** (such as _Eubacterium rectale_, present only in the control group). 
+
+**PCA does not show a clear separation between the groups**, with overlap in both. In fact, the first component explains only about 14% of the total variability. In this regard, the article mentions that in component 5 there is a clearer separation between the groups (which we did not observe): 
+
+```{r PC5, fig.cap="PC5"}
+var_pc1 <- round(summary_pca$importance[2,1] * 100, 1)
+var_pc5 <- round(summary_pca$importance[2,5] * 100, 1)
+
+# Plot (PC1 vs PC5)
+plot(pca_scores$PC1, pca_scores$PC5, 
+     pch = 21, 
+     bg = palette_pca[pca_scores$Condition], 
+     col = "white", 
+     cex = 1.5,
+     lwd = 0.5,
+     main = "PCA: Component 1 vs Component 5",
+     xlab = paste0("PC1 (", var_pc1, "%)"),
+     ylab = paste0("PC5 (", var_pc5, "%)"), 
+     las = 1,
+     bty = "l")
+abline(h = 0, v = 0, lty = 2, col = "gray80")
+
+# legend
+legend("topright", 
+       legend = names_condition, 
+       pt.bg = palette_pca, 
+       pch = 21, 
+       col = "white", 
+       bty = "n", 
+       cex = 0.9,
+       title = "Group")
+```
+
+As for the **nMDS and correspondence analyses (not directly available in the published study)**, they follows the same pattern; it does not show an objective separation between the groups. On the other hand, thanks to the CA, we observe low inertia, but sufficient for the differences to be statistically significant. 
+
+In general, **there is no clear separation between controls and patients, but there are key biological differences that explain the crucial role of the microbiome between the two study groups**. In fact, the study itself states that some of these microorganisms may serve as biomarkers of disease. 
+
+# 6. Conclusions
+
+In this metagenomic analysis (MGWAS), which examines the relative abundances of the microbiome in healthy individuals and those with type 2 diabetes mellitus, we observe a group of bacteria that are highly interrelated, with **very subtle differences in terms of changes in composition and abundance within each group**. 
+
+Since we are working with relative abundances, it is essential **to normalize the data logarithmically** (as well as scaling their values). Similarly, the method chosen to calculate the distance fully supports the conclusions drawn. In this case, the Bray-Curtis method was selected. However, **the principal component analysis does not provide a good explanation of the total variance**. 
+
+When applying **nMDS analysis (to the untransformed data), we obtain a similar conclusion regarding the separation of groups**. Finally, **correspondence analysis** allows us to obtain information about which **bacteria contribute most to the small but existing divergence** between groups. 
+
+As principal limitation of this study we have not been able to calculate the Mahalanabois distance using robust methodology. Intead, we have used a classical methodology. 
+
+To conclude, through rigorous multivariate analysis, we can appreciate that there are differences in the nature of the two groups, with predominant bacteria as specific marker for each group. 
+
+# 7. Bibliography 
+
+1. Shannon, C. E., & Weaver, W. (1949). THE MATHEMATICAL THEORY OF COMMUNICATION.
+
+2. Bollarapu MJ, Kuchibhotla S, Kvsn R, Patel H. Dynamic perspectives on biodiversity quantification: beyond conventional metrics. PeerJ. 2024;12(10). doi:10.7717/peerj.17924
+
+3. van den Berg RA, Hoefsloot HCJ, Westerhuis JA, Smilde AK, van der Werf MJ. Centering, scaling, and transformations: Improving the biological information content of metabolomics data. BMC Genomics. 2006 Jun 8;7. doi:10.1186/1471-2164-7-142. 
+
+4. robustbase source: R/covMcd.R [Internet]. [cited 2026 Apr 18]. Available from: https://rdrr.io/cran/robustbase/src/R/covMcd.R 
+
+5. Dealing With Missing Data in R - DataCamp Learn [Internet]. [cited 2026 Apr 27]. Available from: https://app.datacamp.com/learn/courses/dealing-with-missing-data-in-r
+
+6. Anderson MJ. A new method for non-parametric multivariate analysis of variance. Austral Ecol. 2001 Feb 1;26(1):32–46. doi:10.1111/J.1442-9993.2001.01070.PP.X
+
+7. Leeuw J De, Mair P. Shepard Diagram. In: Wiley StatsRef: Statistics Reference Online. Wiley; 2015. p. 1–3. 
+
+8. Sourial N, Wolfson C, Zhu B, Quail J, Fletcher J, Karunananthan S, et al. Correspondence analysis is a useful tool to uncover the relationships among categorical variables. J Clin Epidemiol. 2009;63(6):638. 
+
+9. Correspondence Analysis Using R - GeeksforGeeks [Internet]. [cited 2026 Apr 27]. Available from: https://www.geeksforgeeks.org/r-language/correspondence-analysis-using-r/
+
+10. Wang J, Qin J, Li Y, Cai Z, Li S, Zhu J, et al. A metagenome-wide association study of gut microbiota in type 2 diabetes. Nature. 2012 Oct 4;490(7418):55–60. 
+
+```{r session-info, echo=FALSE}
+sessionInfo()
+```
+
